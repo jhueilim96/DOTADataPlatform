@@ -1,0 +1,25 @@
+# Ignore Jupyter Notebook analysis files
+analysis/
+*.ipynb
+
+# Ignore local blob JSON files
+localblob/
+*.json
+
+# Ignore __pycache__ directories (Python cache)
+__pycache__/
+
+# Ignore logs and other Airflow-generated files
+logs/
+*.log
+*.pid
+*.state
+
+# Ignore virtual environment files (e.g., venv, virtualenv, .env)
+venv/
+virtualenv/
+.env
+
+# Ignore user-specific IDE and editor configuration files
+.idea/
+.vscode/
