@@ -20,12 +20,12 @@ def transform_hero_stag():
     from airflow.providers.postgres.operators.postgres import PostgresOperator
     
     
-    POSTGRES_CONN_ID = "postgres_azure"
+    POSTGRES_CONN_ID = "postgres_azure" #" postgres_local" 
 
     create_tables = PostgresOperator(
         task_id='create_table',
         sql='sql/create_table_stag_hero.sql',
-        postgres_conn_id='postgres_azure'
+        postgres_conn_id=POSTGRES_CONN_ID
     )
 
     @task

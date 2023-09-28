@@ -1,11 +1,7 @@
 from datetime import datetime, timedelta
 import logging
-from airflow.models import DAG, Variable
 from airflow.decorators import dag, task
-from airflow.operators.bash import BashOperator
-from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.operators.postgres import PostgresOperator
-from airflow.providers.microsoft.azure.transfers.local_to_adls import LocalFilesystemToADLSOperator 
 
 default_args = {
     'owner' : 'jh', 
@@ -18,18 +14,18 @@ default_args = {
 @dag(
     dag_id='transform_team_player_v3',  
     default_args=default_args, 
-    description='Transform player team from bronze to silver table, then repliicate a copy for ETL', 
+    description='Transform JSON from bronze layer to player_stag table in silver', 
     start_date=datetime(2023, 9, 5), 
     schedule='@once'
 ) 
 def transform_league_team_stag():
 
-    POSTGRES_CONN_ID = "postgres_azure"
+    POSTGRES_CONN_ID = "postgres_azure" # "postgres_local" #
 
     get_active_input_entity = PostgresOperator(
         task_id='get_active_entity',
         sql='sql/lookup_source_entity_ids.sql',
-        postgres_conn_id='postgres_azure',
+        postgres_conn_id=POSTGRES_CONN_ID,
         params={'source':'OpenDota', 'object':'leagues-team'}, # To parameterize object by calling config
         do_xcom_push=True 
     )
@@ -69,15 +65,11 @@ def transform_league_team_stag():
     def upsert_data_from_json(container, entity, filenames):
         from airflow.providers.microsoft.azure.hooks.data_lake import AzureDataLakeStorageV2Hook    
         from airflow.providers.postgres.hooks.postgres import PostgresHook
-        from psycopg2.extras import execute_values
-        import traceback
         import json
         import io
         import pandas as pd
-        from jinja2 import Environment
         
         adls_client = AzureDataLakeStorageV2Hook(adls_conn_id='adls_id')
-        adls_folder_path = f"{entity}"
         file_system_client = adls_client.get_file_system(file_system=container)
 
         dfs = []
@@ -168,7 +160,7 @@ def transform_league_team_stag():
     update_metadata = PostgresOperator(
         task_id='update_metadata',
         sql='sql/update_metadata.sql',
-        postgres_conn_id='postgres_azure',
+        postgres_conn_id=POSTGRES_CONN_ID,
         params={'source':'OpenDota', 'object':'player', 'id_column_name':'account_id', 'source_silver_table':'dota.player_stag'}
     )
     

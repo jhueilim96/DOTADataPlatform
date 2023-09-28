@@ -42,7 +42,9 @@ def extract_match_details():
     )
 
     @task
-    def call_api_save_json(config, entity, entity_id): 
+    def call_api_save_json(config, entity, entity_id, api_delay_seconds=40, max_active_tis_per_dag=30) : 
+        import time
+
         API_KEY =  Variable.get("OPENDOTA_API_KEY")
         API_URL, is_active = config[0]
 
@@ -69,6 +71,7 @@ def extract_match_details():
             print(f'Saving data to file {filename} in {folder_path}')
             json.dump(data, file, indent=4)
 
+        time.sleep(api_delay_seconds)
         return folder_path  
 
     @task
@@ -96,10 +99,11 @@ def extract_match_details():
 
     entity = 'matches'
     container ='bronze'
+    API_DELAY_SECONDS = 40
 
     config = lookup_source_api.output
     entity_ids = lookup_source_entity.output
-    save_folder_path = call_api_save_json.partial(config=config, entity=entity).expand(entity_id=entity_ids)
+    save_folder_path = call_api_save_json.partial(config=config, entity=entity, api_delay_seconds=API_DELAY_SECONDS).expand(entity_id=entity_ids)
     delete_folder_path = upload_adls_batch(container, entity, save_folder_path)
     delete_local_folder(delete_folder_path)
 

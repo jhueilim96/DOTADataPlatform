@@ -14,9 +14,6 @@ default_args = {
     'provide_context': True
 }
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
-POSTGRES_CONN_ID = "postgres_azure"
 
 
 @dag(
@@ -28,10 +25,12 @@ POSTGRES_CONN_ID = "postgres_azure"
 ) 
 def transform_league_team_stag():
 
+    POSTGRES_CONN_ID = "postgres_azure" # "postgres_local" #
+
     get_active_input_entity = PostgresOperator(
         task_id='get_active_entity',
         sql='sql/lookup_input_entity.sql',
-        postgres_conn_id='postgres_azure',
+        postgres_conn_id=POSTGRES_CONN_ID,
         params={'object':'leagues'},
         do_xcom_push=True
     )
@@ -73,11 +72,9 @@ def transform_league_team_stag():
         from airflow.providers.microsoft.azure.hooks.data_lake import AzureDataLakeStorageV2Hook    
         from airflow.providers.postgres.hooks.postgres import PostgresHook
         from psycopg2.extras import execute_values
-        import traceback
         import json
         
         adls_client = AzureDataLakeStorageV2Hook(adls_conn_id='adls_id')
-        adls_folder_path = f"{entity}"
         file_system_client = adls_client.get_file_system(file_system=container)
         file_client = file_system_client.get_file_client(filename)
         blob_data = file_client.download_file()
@@ -106,14 +103,14 @@ def transform_league_team_stag():
         """
 
         try:
-            logger.info("Inserting values to DB")
+            logging.info("Inserting values to DB")
             execute_values(cur, upsert_query, data_to_upsert)
         except Exception as error:
-            logger.info('Rollback')
+            logging.info('Rollback')
             cur.execute("ROLLBACK;")
             raise error
         else:
-            logger.info('Insert is successful')
+            logging.info('Insert is successful')
             conn.commit()
             cur.close()
         finally:
@@ -124,7 +121,7 @@ def transform_league_team_stag():
     update_metadata = PostgresOperator(
         task_id='update_metadata',
         sql='sql/update_metadata.sql',
-        postgres_conn_id='postgres_azure',
+        postgres_conn_id=POSTGRES_CONN_ID,
         params={'source':'OpenDota', 'object':'leagues-team', 'id_column_name':'team_id', 'source_silver_table':'dota.league_team_stag'}
     )
     
