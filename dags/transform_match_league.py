@@ -19,12 +19,12 @@ def transform_match_league_json_to_table_stag():
     from airflow.providers.postgres.operators.postgres import PostgresOperator
     import logging
 
-    POSTGRES_CONN_ID = "postgres_azure"
+    POSTGRES_CONN_ID = " postgres_azure" # "postgres_local" #
 
     get_active_input_entity = PostgresOperator(
         task_id='get_active_entity',
         sql='sql/lookup_source_entity_ids.sql',
-        postgres_conn_id='postgres_azure',
+        postgres_conn_id=POSTGRES_CONN_ID,
         params={'source':'OpenDota', 'object':'leagues'}, # To parameterize object by calling config
         do_xcom_push=True 
     )
@@ -65,13 +65,9 @@ def transform_match_league_json_to_table_stag():
     def upsert_data_from_json(container, entity, filenames):
         from airflow.providers.microsoft.azure.hooks.data_lake import AzureDataLakeStorageV2Hook    
         from airflow.providers.postgres.hooks.postgres import PostgresHook
-        from psycopg2.extras import execute_values
-        import traceback
         import json
         import csv
         import io
-        import pandas as pd
-        import numpy as np
         from jinja2 import Template
         from typing import List, Dict
 
@@ -94,7 +90,6 @@ def transform_match_league_json_to_table_stag():
             return list(headers)
 
         adls_client = AzureDataLakeStorageV2Hook(adls_conn_id='adls_id')
-        adls_folder_path = f"{entity}"
         file_system_client = adls_client.get_file_system(file_system=container)
 
         output = []
@@ -201,7 +196,7 @@ def transform_match_league_json_to_table_stag():
     update_metadata = PostgresOperator(
         task_id='update_metadata',
         sql='sql/update_metadata.sql',
-        postgres_conn_id='postgres_azure',
+        postgres_conn_id=POSTGRES_CONN_ID,
         params={'source':'OpenDota', 'object':'match', 'id_column_name':'match_id', 'source_silver_table':'dota.match_league_stag'}
     )
 

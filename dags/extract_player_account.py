@@ -3,7 +3,7 @@ from airflow.decorators import dag, task
 
 default_args = {
     'owner' : 'jh', 
-    'retries': 0,
+    'retries': 2,
     'retry_delay' : timedelta(minutes=1),
     'provide_context': True
 }
@@ -18,12 +18,12 @@ default_args = {
 def extract_player_account():
     from airflow.models import Variable
     from airflow.providers.postgres.operators.postgres import PostgresOperator
-    from airflow.providers.microsoft.azure.transfers.local_to_adls import LocalFilesystemToADLSOperator 
     from airflow.providers.microsoft.azure.hooks.data_lake import AzureDataLakeStorageV2Hook
     import logging
     import os
     import requests
     import json
+    import time
 
 
     lookup_source_api = PostgresOperator(
@@ -43,7 +43,7 @@ def extract_player_account():
     )
 
     @task
-    def call_api_save_json(config, entity, entity_id): 
+    def call_api_save_json(config, entity, entity_id, api_delay_seconds=40, max_active_tis_per_dag=30): 
         API_KEY =  Variable.get("OPENDOTA_API_KEY")
         API_URL, is_active = config[0]
 
@@ -70,6 +70,7 @@ def extract_player_account():
             print(f'Saving data to file {filename} in {folder_path}')
             json.dump(data, file, indent=4)
 
+        time.sleep(api_delay_seconds)
         return folder_path  
     
     @task

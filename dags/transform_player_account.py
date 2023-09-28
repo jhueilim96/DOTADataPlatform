@@ -9,9 +9,9 @@ default_args = {
 }
 
 @dag(
-    dag_id='transform_player_v1', 
+    dag_id='transform_player_account_v1', 
     default_args=default_args, 
-    description='Transform JSON from bronze layer to player_stag table in silver', 
+    description='Transform JSON from bronze layer to people_stag table in silver', 
     start_date=datetime(2023, 9, 11), 
     schedule='@once'
 ) 
@@ -19,12 +19,12 @@ def transform_player_stag():
     from airflow.providers.postgres.operators.postgres import PostgresOperator
     import logging
 
-    POSTGRES_CONN_ID = "postgres_azure"
+    POSTGRES_CONN_ID = "postgres_azure" # "postgres_local" # 
 
     get_active_input_entity = PostgresOperator(
         task_id='get_active_entity',
         sql='sql/lookup_source_entity_ids.sql',
-        postgres_conn_id='postgres_azure',
+        postgres_conn_id=POSTGRES_CONN_ID,
         params={'source':'OpenDota', 'object':'player'}, # To parameterize object by calling config
         do_xcom_push=True 
     )
@@ -65,19 +65,35 @@ def transform_player_stag():
     def upsert_data_from_json(container, entity, filenames):
         from airflow.providers.microsoft.azure.hooks.data_lake import AzureDataLakeStorageV2Hook    
         from airflow.providers.postgres.hooks.postgres import PostgresHook
-        from psycopg2.extras import execute_values
-        import traceback
         import json
         import io
-        import pandas as pd
-        import numpy as np
+        import csv
         from jinja2 import Template
         
         adls_client = AzureDataLakeStorageV2Hook(adls_conn_id='adls_id')
-        adls_folder_path = f"{entity}"
         file_system_client = adls_client.get_file_system(file_system=container)
 
-        player_data = []
+        pg_hook = PostgresHook.get_hook(POSTGRES_CONN_ID)    
+        conn = pg_hook.get_conn()
+        cur = conn.cursor()
+
+        schema = 'dota'
+        table = 'people_stag'
+        temp_table_name = 'people_temp'
+
+        sql_get_columns = f"""
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = '{schema}'
+        AND table_name = '{table}'; 
+        """
+        cur.execute(sql_get_columns)
+        columns = cur.fetchall()
+        columns = [col for col in columns if col[0] not in ('created', 'modified')]
+        column_names = [col[0] for col in columns]
+        col_in_schema = set(column_names)
+
+        output = []
         for filename in filenames:
             file_client = file_system_client.get_file_client(filename)
             blob_data = file_client.download_file()
@@ -88,21 +104,25 @@ def transform_player_stag():
                 'mmr_estimate': data.pop('mmr_estimate').pop('estimate'),
                 **data
             }
-            player_data.append(normalised_data)
+            output.append(normalised_data)
 
-        merged_df = pd.DataFrame(player_data)
-        merged_df['competitive_rank'] = merged_df['competitive_rank'].fillna(0).astype(int)
-        merged_df['solo_competitive_rank'] = merged_df['solo_competitive_rank'].fillna(0).astype(int)
+        get_headers = lambda data:list(set([key for doc in data for key in doc.keys()]))
+        headers = get_headers(output)
+        logging.info(f"Number of rows for input data: {len(output)}")
+        logging.info(f"Number of headers to insert: {len(headers)}")
 
-        output = io.StringIO()
-        merged_df.to_csv(output, sep='\t', header=False, index=False)
-        output.seek(0)
+        # Validation of input headers and schema columns
+        col_from_input_data = set(headers)
+        col_unexpected_from_input = col_from_input_data.difference(col_in_schema)
+        logging.info(f"Number of undefined columns detected: {len(col_unexpected_from_input)}. Column names : {col_unexpected_from_input}")
+        if not col_from_input_data.issubset(col_in_schema):
+            raise ValueError(f"Failure due to unexpected columns from inputs files. {len(col_unexpected_from_input)} undefined columns : {col_unexpected_from_input}")
 
-        logging.info(f"Size of data: {len(output.getvalue())}")
+        output_buffer = io.StringIO()
+        writer = csv.DictWriter(output_buffer, headers, delimiter='\t', extrasaction='ignore', quoting=csv.QUOTE_NONE, escapechar='\\')
+        writer.writerows(rowdicts=output)
 
-        pg_hook = PostgresHook.get_hook(POSTGRES_CONN_ID)    
-        conn = pg_hook.get_conn()
-        cur = conn.cursor()
+        logging.info(f"Size of data: {len(output_buffer.getvalue())}")
 
         sql_create_temp_table_template = """
             CREATE TEMP TABLE IF NOT EXISTS {{ temp_table }} (
@@ -129,25 +149,12 @@ def transform_player_stag():
                 modified = EXCLUDED.modified
         """
 
-        schema = 'dota'
-        table = 'people_stag'
-        temp_table_name = 'people_temp'
-
-        sql_get_columns = f"""
-        SELECT column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = '{schema}'
-        AND table_name = '{table}'; 
-        """
-        cur.execute(sql_get_columns)
-        columns = cur.fetchall()
-        columns = [col for col in columns if col[0] not in ('created', 'modified')]
-
         sql_upsert_target =  Template(sql_upsert_target_template).\
                                 render(columns=columns, table=table, schema=schema, id_column='account_id', temp_table=temp_table_name)
-
         sql_create_temp_table = Template(sql_create_temp_table_template).\
                                  render(temp_table=temp_table_name, columns=columns)
+        logging.info(sql_create_temp_table)
+        logging.info(sql_upsert_target)
 
 
         try:
@@ -155,13 +162,11 @@ def transform_player_stag():
             cur.execute(sql_create_temp_table)
             
             logging.info(f"Copy data into temp table: {temp_table_name}")
-            logging.info(output.getvalue())
-            cur.copy_from(output, temp_table_name, columns=(col[0] for col in columns))
+            output_buffer.seek(0)
+            cur.copy_from(output_buffer, temp_table_name, columns=headers, null="")
             
             logging.info(f"Upserting data into table: {schema}.{table}")
-            logging.info(sql_upsert_target)
             cur.execute(sql_upsert_target)
-
 
         except Exception as error:
             logging.info('Data upsert failed. Executing rollback')
